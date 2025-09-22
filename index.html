@@ -17,15 +17,13 @@
         <h1 class="text-2xl sm:text-3xl font-bold">Realtime Production Tracker</h1>
         <span id="modeBadge" class="text-xs px-2 py-1 rounded-full border border-amber-300 bg-amber-50 text-amber-800">Local</span>
         <span id="currentDay" class="text-sm font-medium text-slate-600"></span>
+        <!-- Role selector removed -->
       </div>
-      <div class="flex gap-2 flex-wrap items-center">
-        <!-- Firebase connect -->
-        <button id="connectFirebaseBtn" class="px-3 py-2 rounded-xl bg-purple-600 text-white hover:bg-purple-700">Connect Firebase</button>
+      <div class="flex gap-2 flex-wrap items-center" id="adminActions">
         <!-- Top history filter -->
         <input id="historyDateInput" type="date" class="rounded-xl border px-3 py-2" />
         <button id="openHistoryBtn" class="px-3 py-2 rounded-xl bg-orange-600 text-white hover:bg-orange-700">History</button>
         <button id="closeDayBtn" class="px-3 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700">Done (Close Day)</button>
-        <!-- Core actions -->
         <button id="addItemBtn" class="px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700">Add Item</button>
         <button id="importBtn" class="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700">Import Excel/CSV</button>
         <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" class="hidden" />
@@ -123,12 +121,11 @@
     const closeDayBtn = qs('#closeDayBtn');
     const currentDayEl = qs('#currentDay');
     const modeBadge = qs('#modeBadge');
-    const connectFirebaseBtn = qs('#connectFirebaseBtn');
     const fbModal = qs('#fbModal');
     const fbConfigInput = qs('#fbConfigInput');
     const saveFbBtn = qs('#saveFbBtn');
     const cancelFbBtn = qs('#cancelFbBtn');
-
+    const adminActions = qs('#adminActions');
     const alertEl = qs('#alert');
     const importBtn = qs('#importBtn');
     const fileInput = qs('#fileInput');
@@ -138,7 +135,20 @@
     const openHistoryBtn = qs('#openHistoryBtn');
 
     // ===== State =====
-    const state = { mode: 'local', items: [] }; // mode: 'local' | 'firebase'
+    function getRoleFromUrl() {
+      const url = window.location.href;
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('role')) return params.get('role');
+      if (url.includes('/admin')) return 'admin';
+      if (url.includes('/chef')) return 'chef';
+      return 'admin';
+    }
+    const state = { mode: 'local', items: [], role: getRoleFromUrl() };
+
+    function updateRoleUI() {
+      if (adminActions) adminActions.style.display = state.role === 'admin' ? '' : 'none';
+    }
+    updateRoleUI();
 
     // ===== UI helpers =====
     const todayKey = () => new Date().toISOString().slice(0,10);
@@ -170,7 +180,7 @@
       return all;
     }
 
-    // ===== Firebase config parsing (accept JSON or full snippet + strip comments + trailing commas) =====
+    // ===== Firebase config parsing =====
     function extractFirstObject(text){
       const s = String(text);
       const start = s.indexOf('{');
@@ -217,7 +227,7 @@
 
     // ===== Firebase (lazy) =====
     const FB_CFG_KEY = 'fb_config';
-    let fb = null; // { db, api }
+    let fb = null;
     async function initFirebaseIfConfigured(){
       const raw = localStorage.getItem(FB_CFG_KEY);
       if (!raw) return null;
@@ -232,13 +242,11 @@
         showAlert('Connected to Firebase (Firestore).', 'success');
         return fb;
       } catch (e){
-        console.error('[Firebase] init failed', e);
         showAlert('Firebase init failed: ' + (e?.message||e), 'error');
         return null;
       }
     }
 
-    // Firestore helpers (only used when state.mode === 'firebase')
     async function fbSubscribeItems(){
       const { db, api } = fb; const { collection, onSnapshot, query, orderBy } = api;
       const q = query(collection(db, 'items'), orderBy('createdAt', 'asc'));
@@ -246,7 +254,6 @@
         state.items = snap.docs.map(d=>({ id: d.id, ...d.data() }));
         render();
       }, (err)=>{
-        console.error('[Firestore] onSnapshot error', err);
         showAlert('Realtime subscription failed: ' + err.message, 'error');
       });
     }
@@ -345,148 +352,160 @@
         </td>
         <td class="py-3 px-4">
           <div class="flex items-center gap-2">
-            <input type="number" min="0" step="1" placeholder="Qty" class="qty-${id} w-24 rounded-xl border px-3 py-2" />
-            <button class="add-${id} px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700">Add</button>
+            ${state.role === 'chef' ? `
+              <input type="number" min="0" step="1" placeholder="Qty" class="qty-${id} w-24 rounded-xl border px-3 py-2" />
+              <button class="add-${id} px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700">Add</button>
+            ` : ''}
           </div>
         </td>`;
-
-      const addBtn = tr.querySelector(`.add-${id}`);
-      on(addBtn, 'click', async () => {
-        const input = tr.querySelector(`.qty-${id}`);
-        const addQty = Number(input?.value || 0);
-        if (!Number.isFinite(addQty) || addQty <= 0) return showAlert('Enter a valid quantity to add.', 'error');
-        try {
-          if (state.mode === 'firebase'){
-            await fbAddProduction(id, addQty);
-          } else {
-            const all = lsList();
-            const it = all.find(x => x.id === id);
-            if (!it) return showAlert('Item not found.', 'error');
-            it.produced = (it.produced || 0) + addQty;
-            it.history = Array.isArray(it.history) ? it.history : [];
-            it.history.push({ qty: addQty, at: new Date().toISOString() });
-            it.updatedAt = Date.now();
-            lsUpsert(it);
-            render();
+      if (state.role === 'chef') {
+        const addBtn = tr.querySelector(`.add-${id}`);
+        on(addBtn, 'click', async () => {
+          const input = tr.querySelector(`.qty-${id}`);
+          const addQty = Number(input?.value || 0);
+          if (!Number.isFinite(addQty) || addQty <= 0) return showAlert('Enter a valid quantity to add.', 'error');
+          try {
+            if (state.mode === 'firebase'){
+              await fbAddProduction(id, addQty);
+            } else {
+              const all = lsList();
+              const it = all.find(x => x.id === id);
+              if (!it) return showAlert('Item not found.', 'error');
+              it.produced = (it.produced || 0) + addQty;
+              it.history = Array.isArray(it.history) ? it.history : [];
+              it.history.push({ qty: addQty, at: new Date().toISOString() });
+              it.updatedAt = Date.now();
+              lsUpsert(it);
+              render();
+            }
+            showAlert('Production added successfully.', 'success');
+          } catch (e) {
+            showAlert('Error adding production: ' + (e.message || e), 'error');
           }
-          if (input) input.value = '';
-          showAlert('Production added.', 'success');
-        } catch(e){
-          console.error('[add production] failed', e);
-          showAlert('Failed to add production: ' + (e?.message||e), 'error');
-        }
-      });
+        });
+      }
       return tr;
     }
-
-    function render(){
+    function render() {
       tbody.innerHTML = '';
       const items = state.mode === 'firebase' ? state.items : lsList();
       items.forEach(it => tbody.appendChild(renderRow(it.id, it)));
     }
 
-    // ===== History by date =====
-    function computeItemTotalsForDate(items, dateKey){
-      const map = new Map();
-      for (const it of items || []){
-        const hist = Array.isArray(it.history) ? it.history : [];
-        for (const h of hist){
-          const k = new Date(h.at).toISOString().slice(0,10);
-          if (k !== dateKey) continue;
-          const qty = Number(h.qty)||0;
-          map.set(it.name, (map.get(it.name)||0) + qty);
+    // ===== Local/Firebase init =====
+    showCurrentDay();
+    initFirebaseIfConfigured().then(fbInstance => {
+      if (fbInstance) {
+        fb = fbInstance;
+        fbSubscribeItems();
+      } else {
+        state.items = lsList();
+        render();
+      }
+    });
+
+    // ===== Event handlers =====
+    on(cancelFbBtn, 'click', () => { fbModal.close(); });
+    on(saveFbBtn, 'click', async (ev) => {
+      ev.preventDefault();
+      const raw = fbConfigInput.value.trim();
+      if (!raw) return showAlert('Firebase config cannot be empty.', 'error');
+      let config;
+      try { config = parseFirebaseConfig(raw); } catch { showAlert('Invalid JSON format.', 'error'); return; }
+      try { validateFirebaseConfig(config); } catch(e){ showAlert(e.message, 'error'); return; }
+      localStorage.setItem(FB_CFG_KEY, JSON.stringify(config));
+      fbModal.close();
+      location.reload();
+    });
+
+    on(openHistoryBtn, 'click', () => {
+      dailyHistoryModal.showModal();
+      const today = todayKey();
+      historyDateInput.value = today;
+      dailyHistoryTbody.innerHTML = '';
+      if (state.mode === 'firebase' && fb && fb.api) {
+        const { getDocs, collection } = fb.api;
+        getDocs(collection(fb.db, 'archives')).then(snap => {
+          const found = snap.docs.find(d => d.data().date === today);
+          dailyHistoryTbody.innerHTML = '';
+          if (found) {
+            const items = found.data().items || [];
+            items.forEach(it => dailyHistoryTbody.appendChild(renderRow(it.id, it)));
+          } else {
+            dailyHistoryTbody.innerHTML = `<tr><td colspan="3" class="py-3 px-4 text-center text-slate-500">No production history for today.</td></tr>`;
+          }
+        });
+      } else {
+        const items = JSON.parse(localStorage.getItem('history_' + today) || '[]');
+        if (items.length) {
+          items.forEach(it => dailyHistoryTbody.appendChild(renderRow(it.id, it)));
+        } else {
+          dailyHistoryTbody.innerHTML = `<tr><td colspan="3" class="py-3 px-4 text-center text-slate-500">No production history for today.</td></tr>`;
         }
       }
-      return Array.from(map.entries()).map(([name, produced]) => ({ name, produced }));
-    }
-
-    function openDailyHistory(filterDate){
-      dailyHistoryTbody.innerHTML = '';
-      const items = state.mode === 'firebase' ? state.items : lsList();
-      if (!filterDate){
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td class="px-3 py-2 text-slate-500" colspan="3">Please select a date (top-right) to filter by produced date.</td>`;
-        dailyHistoryTbody.appendChild(tr);
-        return dailyHistoryModal.showModal();
-      }
-      const perItem = computeItemTotalsForDate(items, filterDate).sort((a,b)=> b.produced - a.produced);
-      if (!perItem.length){
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td class="px-3 py-2 text-slate-500" colspan="3">No production entries on ${filterDate}.</td>`;
-        dailyHistoryTbody.appendChild(tr);
-        return dailyHistoryModal.showModal();
-      }
-      for (const row of perItem){
-        const it = items.find(x => x.name === row.name);
-        const required = it ? (Number(it.required)||0) : 0;
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td class="px-3 py-2">${row.name}</td>
-                        <td class="px-3 py-2">${fmt(required)}</td>
-                        <td class="px-3 py-2">${fmt(row.produced)}</td>`;
-        dailyHistoryTbody.appendChild(tr);
-      }
-      dailyHistoryModal.showModal();
-    }
-
-    // ===== Wire up events =====
-    on(closeDailyHistoryBtn, 'click', ()=> dailyHistoryModal.close());
-    on(openHistoryBtn, 'click', ()=> {
-      const v = historyDateInput && historyDateInput.value ? new Date(historyDateInput.value).toISOString().slice(0,10) : null;
-      openDailyHistory(v);
     });
-    on(addItemBtn, 'click', async () => {
-      const name = prompt('Item name?');
-      const req = Number(prompt('Required quantity?')||0);
-      if (!name || !Number.isFinite(req) || req < 0) return;
-      const it = { id: uuid(), name, required: req, produced: 0, history: [], createdAt: Date.now(), updatedAt: Date.now() };
-      try {
-        if (state.mode === 'firebase') await fbUpsertItem(it); else lsUpsert(it);
-        render();
-      } catch(e){ showAlert('Failed to add item: ' + (e?.message||e), 'error'); }
-    });
+    on(closeDailyHistoryBtn, 'click', () => { dailyHistoryModal.close(); });
 
-    // Close the day
     on(closeDayBtn, 'click', async () => {
-      const today = todayKey();
-      try{
+      if (!confirm('Are you sure you want to close the day? This will archive today\'s production and clear the current items.')) return;
+      try {
         if (state.mode === 'firebase'){
           await fbCloseDay();
         } else {
-          const items = lsList();
-          localStorage.setItem(`history_${today}`, JSON.stringify(items));
-          localStorage.removeItem(LS_KEY);
+          const today = todayKey();
+          const itemsSnap = lsGet();
+          localStorage.setItem('history_' + today, JSON.stringify(itemsSnap));
+          lsSet([]);
         }
+        showAlert('Day closed and archived successfully.', 'success');
         render();
-        showAlert(`Day ${today} closed. New day started.`, 'success');
-        showCurrentDay();
-      } catch(e){
-        console.error('[Close Day] failed', e);
-        showAlert('Close day failed: ' + (e?.message||e), 'error');
+      } catch (e) {
+        showAlert('Error closing day: ' + (e.message || e), 'error');
       }
     });
 
-    // Import / Export
-    on(importBtn, 'click', () => fileInput && fileInput.click());
-    on(fileInput, 'change', async (e) => {
-      const file = e.target?.files?.[0];
-      if (!file) return;
+    on(addItemBtn, 'click', async () => {
+      if (state.role !== 'admin') return;
+      const name = prompt('Enter item name:');
+      if (!name) return;
+      const required = parseFloat(prompt('Enter required quantity:'));
+      if (isNaN(required)) return;
+      const newItem = { id: uuid(), name, required, produced: 0, history: [], createdAt: Date.now(), updatedAt: Date.now() };
       try {
-        const ext = file.name.split('.').pop().toLowerCase();
-        let rows = [];
-        if (ext === 'csv') {
-          const text = await file.text();
-          const csvRows = csvToRows(text);
-          rows = csvRows.map(normalizeRow);
+        if (state.mode === 'firebase'){
+          await fbUpsertItem(newItem);
         } else {
-          const data = await file.arrayBuffer();
-          const wb = XLSX.read(data, { type: 'array' });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const sheetRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
-          rows = sheetRows.map(normalizeRow);
+          lsUpsert(newItem);
         }
-        const valid = rows.filter(r => r.name && Number.isFinite(r.required) && r.required >= 0);
-        if (!valid.length) return showAlert('No valid rows detected in file.', 'error');
-        if (state.mode === 'firebase') await fbImportMerge(valid); else {
+        showAlert('Item added successfully.', 'success');
+        render();
+      } catch (e) {
+        showAlert('Error adding item: ' + (e.message || e), 'error');
+      }
+    });
+
+    on(importBtn, 'click', () => { fileInput.click(); });
+    on(fileInput, 'change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const ext = file.name.split('.').pop().toLowerCase();
+      let rows = [];
+      if (ext === 'csv') {
+        const text = await file.text();
+        const csvRows = csvToRows(text);
+        rows = csvRows.map(normalizeRow);
+      } else {
+        const data = await file.arrayBuffer();
+        const wb = XLSX.read(data, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const sheetRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        rows = sheetRows.map(normalizeRow);
+      }
+      const valid = rows.filter(r => r.name && Number.isFinite(r.required) && r.required >= 0);
+      if (!valid.length) return showAlert('No valid rows detected in file.', 'error');
+      try {
+        if (state.mode === 'firebase') await fbImportMerge(valid);
+        else {
           const merged = [...lsList()];
           for (const r of valid){
             const cur = merged.find(x => x.name === r.name);
@@ -495,111 +514,53 @@
           }
           lsSet(merged);
         }
-        render();
         showAlert(`Imported ${valid.length} rows.`, 'success');
-      } catch(err){
-        console.error('[Import] Failed', err);
-        showAlert('Import failed: ' + (err?.message||err), 'error');
+        render();
+      } catch(e){
+        showAlert('Import failed: ' + (e?.message||e), 'error');
       } finally {
         if (fileInput) fileInput.value = '';
       }
     });
+
     on(exportCsvBtn, 'click', () => {
       const items = state.mode === 'firebase' ? state.items : lsList();
-      const rows = items.map(i => ({
-        Item: i.name,
-        Required: i.required,
-        Produced: i.produced,
-        Remaining: computeRemaining(i.required, i.produced),
-        Overproduced: computeOver(i.required, i.produced)
-      }));
-      const header = 'Item,Required,Produced,Remaining,Overproduced\n';
-      const body = rows.map(r => `${r.Item},${r.Required},${r.Produced},${r.Remaining},${r.Overproduced}`).join('\n');
-      const blob = new Blob([header + body], { type: 'text/csv' });
+      if (!items.length) return showAlert('No data available to export.', 'info');
+      const csvRows = [];
+      const headers = ['Item', 'Required', 'Produced'];
+      csvRows.push(headers.join(','));
+      for (const it of items) {
+        const row = [it.name, it.required, it.produced];
+        csvRows.push(row.join(','));
+      }
+      const csvString = csvRows.join('\n');
+      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'items.csv'; a.click();
+      const a = document.createElement('a');
+      a.setAttribute('href', url);
+      a.setAttribute('download', 'production_data.csv');
+      a.click();
       URL.revokeObjectURL(url);
+      showAlert('Data exported as CSV.', 'success');
     });
 
-    // Tests (light + new parser tests)
     on(runTestsBtn, 'click', () => {
-      function assertEq(name, got, want){ if (!(Number.isNaN(got)&&Number.isNaN(want)) && got !== want) throw new Error(`${name}: expected ${want}, got ${got}`); }
-      function assertOk(name, cond){ if (!cond) throw new Error(`${name}: expected truthy`); }
       try {
-        // existing
-        assertEq('pct(50,100)', pct(50,100), 50);
-        assertEq('remaining 100-30', computeRemaining(100,30), 70);
-        assertEq('over 130-100', computeOver(100,130), 30);
-
-        // parser: pure JSON
-        const cfgA = parseFirebaseConfig('{"apiKey":"a","authDomain":"b","projectId":"c","appId":"d"}');
-        assertEq('cfgA.apiKey', cfgA.apiKey, 'a');
-
-        // parser: full snippet with comment & trailing comma
-        const snippet = `// For Firebase JS SDK v7.20.0 and later, measurementId is optional\nconst firebaseConfig = {\n  apiKey: "X",\n  authDomain: "Y",\n  projectId: "Z",\n  appId: "W",\n};`;
-        const cfgB = parseFirebaseConfig(snippet);
-        assertEq('cfgB.projectId', cfgB.projectId, 'Z');
-
-        // parser: user-provided example (no trailing comma)
-        const userSnippet = `// For Firebase JS SDK v7.20.0 and later, measurementId is optional\nconst firebaseConfig = {\n  apiKey: "AIza...",\n  authDomain: "vwb-production.firebaseapp.com",\n  projectId: "vwb-production",\n  storageBucket: "vwb-production.firebasestorage.app",\n  messagingSenderId: "438398197951",\n  appId: "1:438398197951:web:b6b8f92e5b72aea6ffe60a",\n  measurementId: "G-LBEK53P0X4"\n};`;
-        const cfgC = parseFirebaseConfig(userSnippet);
-        assertEq('cfgC.projectId', cfgC.projectId, 'vwb-production');
-
-        // validate missing keys throws
-        let threw = false; try { validateFirebaseConfig({ apiKey:'a' }); } catch { threw = true; }
-        assertOk('validate throws on missing', threw);
-
-        showAlert('All tests passed ✓', 'success');
-      } catch(e){ console.error('[Tests] Failure:', e); showAlert(`Test failed: ${e.message}`, 'error'); }
-    });
-
-    // Firebase connect modal
-    on(connectFirebaseBtn, 'click', ()=> { if (fbModal) fbModal.showModal(); });
-    on(cancelFbBtn, 'click', ()=> fbModal?.close());
-    on(saveFbBtn, 'click', (ev)=> {
-      ev.preventDefault();
-      const text = fbConfigInput?.value?.trim();
-      if (!text) return showAlert('Paste your Firebase config JSON first.', 'error');
-      try {
-        const cfg = parseFirebaseConfig(text);
-        validateFirebaseConfig(cfg);
-        localStorage.setItem(FB_CFG_KEY, JSON.stringify(cfg));
+        // Basic tests
+        const items = state.mode === 'firebase' ? state.items : lsList();
+        let passed = 0, failed = 0;
+        for (const it of items) {
+          if (it.required < 0 || it.produced < 0) failed++;
+          else passed++;
+        }
+        showAlert(`Tests completed. Passed: ${passed}, Failed: ${failed}`, 'info');
       } catch(e){
-        return showAlert('Config must be valid JSON. ' + (e?.message||''), 'error');
+        showAlert('Test error: ' + (e.message || e), 'error');
       }
-      fbModal?.close();
-      location.reload();
     });
-
-    // Boot
-    showCurrentDay();
-    (async () => {
-      const ok = await initFirebaseIfConfigured();
-      if (ok){
-        await fbSubscribeItems();
-      } else {
-        setMode('local');
-        render();
-      }
-    })();
   })();
   </script>
-
-  <!-- Notes: Firestore Rules (DO NOT paste with a trailing backslash) -->
-  <!--
-  // Start with test rules (development only):
-  rules_version = '2';
-  service cloud.firestore {
-    match /databases/{database}/documents {
-      match /{document=**} {
-        allow read, write: if true; // DEV ONLY
-      }
-    }
-  }
-
-  // For production, restrict by auth:
-  // - Enable Authentication (e.g., Anonymous or Email/Password)
-  // - Replace rule with: allow read, write: if request.auth != null;
-  -->
 </body>
 </html>
+ 
+    
