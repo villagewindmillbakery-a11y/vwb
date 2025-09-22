@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Realtime Production Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    dialog::backdrop{ background: rgba(2,6,23,0.35); }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <div class="max-w-6xl mx-auto p-4 sm:p-8">
+    <header class="flex items-center justify-between mb-6 gap-3 flex-wrap">
+      <div class="flex items-center gap-3">
+        <h1 class="text-2xl sm:text-3xl font-bold">Realtime Production Tracker</h1>
+        <span id="modeBadge" class="text-xs px-2 py-1 rounded-full border border-amber-300 bg-amber-50 text-amber-800">Local</span>
+        <span id="currentDay" class="text-sm font-medium text-slate-600"></span>
+        <!-- Role selector removed -->
+      </div>
+      <div class="flex gap-2 flex-wrap items-center" id="adminActions">
+        <!-- Top history filter -->
+        <input id="historyDateInput" type="date" class="rounded-xl border px-3 py-2" />
+        <button id="openHistoryBtn" class="px-3 py-2 rounded-xl bg-orange-600 text-white hover:bg-orange-700">History</button>
+        <button id="closeDayBtn" class="px-3 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700">Done (Close Day)</button>
+        <button id="addItemBtn" class="px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700">Add Item</button>
+        <button id="importBtn" class="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700">Import Excel/CSV</button>
+        <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" class="hidden" />
+        <button id="exportCsvBtn" class="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300">Export CSV</button>
+        <button id="runTestsBtn" title="Run built-in tests" class="px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700">Run Tests</button>
+      </div>
+    </header>
+
+    <div id="alert" class="hidden mb-4 rounded-xl border p-3 text-sm"></div>
+
+    <div class="overflow-x-auto rounded-2xl shadow bg-white">
+      <table class="min-w-full text-left">
+        <thead class="bg-slate-100 text-slate-600 text-sm">
+          <tr>
+            <th class="py-3 px-4">Item</th>
+            <th class="py-3 px-4">Required</th>
+            <th class="py-3 px-4">Produced</th>
+            <th class="py-3 px-4">Remaining</th>
+            <th class="py-3 px-4">Overproduced</th>
+            <th class="py-3 px-4">Progress</th>
+            <th class="py-3 px-4">Add Production</th>
+          </tr>
+        </thead>
+        <tbody id="itemsTbody" class="divide-y"></tbody>
+      </table>
+    </div>
+
+    <p class="mt-4 text-xs text-slate-500">Imports <strong>add</strong> to the Required quantity for existing items (sum), instead of replacing it. Click <strong>Connect Firebase</strong> to switch from Local to realtime Firestore sync.</p>
+  </div>
+
+  <!-- History Modal (filter by produced date) -->
+  <dialog id="dailyHistoryModal" class="rounded-2xl p-0 w-full max-w-4xl shadow-2xl">
+    <form method="dialog" class="bg-white rounded-2xl">
+      <div class="px-6 pt-5 pb-2 border-b">
+        <h3 class="text-lg font-semibold">Production History</h3>
+      </div>
+      <div class="px-6 py-4">
+        <div class="max-h-96 overflow-auto border rounded-xl">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-100">
+              <tr>
+                <th class="px-3 py-2 text-left">Item</th>
+                <th class="px-3 py-2 text-left">Required</th>
+                <th class="px-3 py-2 text-left">Produced</th>
+              </tr>
+            </thead>
+            <tbody id="dailyHistoryTbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="px-6 pb-5 pt-2 flex justify-end gap-2 border-t">
+        <button id="closeDailyHistoryBtn" type="button" class="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Firebase Config Modal -->
+  <dialog id="fbModal" class="rounded-2xl p-0 w-full max-w-2xl shadow-2xl">
+    <form method="dialog" class="bg-white rounded-2xl">
+      <div class="px-6 pt-5 pb-2 border-b">
+        <h3 class="text-lg font-semibold">Connect Firebase</h3>
+        <p class="text-xs text-slate-500 mt-1">Paste <strong>either</strong> the raw JSON object or the full snippet like <code>const firebaseConfig = { ... };</code>. Example:<br><code>{
+  "apiKey":"...",
+  "authDomain":"...",
+  "projectId":"...",
+  "appId":"..."
+}</code></p>
+      </div>
+      <div class="px-6 py-4">
+        <textarea id="fbConfigInput" class="w-full h-48 rounded-xl border px-3 py-2 font-mono text-xs" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","appId":"..."}'></textarea>
+        <p class="text-xs text-slate-500 mt-2">
+          Tip: In Firebase Console → Project settings → Your apps → Web app → SDK setup and configuration → <em>Config</em>.
+        </p>
+      </div>
+      <div class="px-6 pb-5 pt-2 flex justify-end gap-2 border-t">
+        <button id="saveFbBtn" class="px-4 py-2 rounded-xl bg-purple-600 text-white hover:bg-purple-700">Save</button>
+        <button id="cancelFbBtn" type="button" class="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  
+  <!-- Force Firebase for all devices (no button, no per-device setup) -->
+  <script>
+    // Overwrite any previous local setting and force Firebase config on load
+    try {
+      localStorage.setItem('fb_config', JSON.stringify({
+        "apiKey": "AIzaSyDIFnyxMRcqpi2nyGFRL1nSxywcFJHBtwo",
+        "authDomain": "vwb-production.firebaseapp.com",
+        "projectId": "vwb-production",
+        "appId": "1:438398197951:web:b6b8f92e5b72aea6ffe60a"
+      }));
+    } catch (e) {
+      console.warn("Failed to set Firebase config in localStorage:", e);
+    }
+  </script>
+
+  <!-- Main App Script (non-module) -->
+  <script>
+  (function(){
+    // ===== Tiny DOM helpers =====
+    const qs = (sel, root=document) => root.querySelector(sel);
+    const on = (el, type, handler) => { if (el) el.addEventListener(type, handler); };
+
+    // ===== DOM refs =====
+    const tbody = qs('#itemsTbody');
+    const dailyHistoryModal = qs('#dailyHistoryModal');
+    const dailyHistoryTbody = qs('#dailyHistoryTbody');
+    const closeDailyHistoryBtn = qs('#closeDailyHistoryBtn');
+    const historyDateInput = qs('#historyDateInput');
+    const closeDayBtn = qs('#closeDayBtn');
+    const currentDayEl = qs('#currentDay');
+    const modeBadge = qs('#modeBadge');
+    const fbModal = qs('#fbModal');
+    const fbConfigInput = qs('#fbConfigInput');
+    const saveFbBtn = qs('#saveFbBtn');
+    const cancelFbBtn = qs('#cancelFbBtn');
+    const adminActions = qs('#adminActions');
+    const alertEl = qs('#alert');
+    const importBtn = qs('#importBtn');
+    const fileInput = qs('#fileInput');
+    const exportCsvBtn = qs('#exportCsvBtn');
+    const addItemBtn = qs('#addItemBtn');
+    const runTestsBtn = qs('#runTestsBtn');
+    const openHistoryBtn = qs('#openHistoryBtn');
+
+    // ===== State =====
+    function getRoleFromUrl() {
+      const url = window.location.href;
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('role')) return params.get('role');
+      if (url.includes('/admin')) return 'admin';
+      if (url.includes('/chef')) return 'chef';
+      return 'admin';
+    }
+    const state = { mode: 'local', items: [], role: getRoleFromUrl() };
+
+    function updateRoleUI() {
+      if (adminActions) adminActions.style.display = state.role === 'admin' ? '' : 'none';
+    }
+    updateRoleUI();
+
+    // ===== UI helpers =====
+    const todayKey = () => new Date().toISOString().slice(0,10);
+    function showCurrentDay(){ currentDayEl.textContent = `Day: ${todayKey()}`; }
+    function setMode(mode){ state.mode = mode; if (modeBadge) modeBadge.textContent = mode === 'firebase' ? 'Firebase' : 'Local'; }
+    function showAlert(msg, type = 'info') {
+      alertEl.textContent = msg;
+      alertEl.className = 'mb-4 rounded-xl border p-3 text-sm ' + (type === 'error' ? 'border-red-300 text-red-700 bg-red-50' : type === 'success' ? 'border-green-300 text-green-700 bg-green-50' : 'border-slate-300 text-slate-700 bg-slate-50');
+      alertEl.classList.remove('hidden');
+      clearTimeout(showAlert._t);
+      showAlert._t = setTimeout(() => alertEl.classList.add('hidden'), 4800);
+    }
+    const fmt = (n) => new Intl.NumberFormat().format(n);
+    const pct = (a, b) => b > 0 ? Math.min(100, Math.round((a / b) * 100)) : 0;
+    const computeRemaining = (required, produced) => Math.max(0, (Number(required) || 0) - (Number(produced) || 0));
+    const computeOver = (required, produced) => Math.max(0, (Number(produced) || 0) - (Number(required) || 0));
+
+    // ===== Local storage backend =====
+    const LS_KEY = 'vwb_items';
+    const uuid = () => (crypto?.randomUUID?.() || 'id-' + Math.random().toString(36).slice(2));
+    const lsGet = (key=LS_KEY) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; } };
+    const lsSet = (v, key=LS_KEY) => localStorage.setItem(key, JSON.stringify(v));
+    const lsList = () => lsGet().sort((a,b)=> (a.createdAt||0) - (b.createdAt||0));
+    function lsUpsert(item){
+      const all = lsGet();
+      const idx = all.findIndex(x => x.id === item.id);
+      if (idx >= 0) all[idx] = item; else all.push(item);
+      lsSet(all);
+      return all;
+    }
+
+    // ===== Firebase config parsing =====
+    function extractFirstObject(text){
+      const s = String(text);
+      const start = s.indexOf('{');
+      if (start === -1) throw new Error('Could not find a { ... } object in the pasted text.');
+      let depth = 0, end = -1, inStr = false, strCh = '';
+      for (let i = start; i < s.length; i++){
+        const ch = s[i];
+        if (inStr){ if (ch === strCh && s[i-1] !== '\\') { inStr = false; strCh = ''; } continue; }
+        if (ch === '"' || ch === '\'') { inStr = true; strCh = ch; continue; }
+        if (ch === '{') depth++;
+        else if (ch === '}'){ depth--; if (depth === 0){ end = i; break; } }
+      }
+      if (end === -1) throw new Error('Malformed object; braces not balanced.');
+      return s.slice(start, end + 1);
+    }
+    function sanitizeObjectLiteral(objStr){
+      let s = String(objStr);
+      // remove /* */ comments
+      s = s.replace(/\/\*[\s\S]*?\*\//g, '');
+      // remove // comments
+      s = s.replace(/(^|[^:])\/\/.*$/gm, '$1');
+      // normalize quotes on keys
+      s = s.replace(/([\{\s,])([a-zA-Z0-9_]+)\s*:/g, '$1"$2":');
+      // convert single to double quotes
+      s = s.replace(/'([^']*)'/g, '"$1"');
+      // remove trailing commas before } or ]
+      s = s.replace(/,\s*(\}|\])/g, '$1');
+      return s;
+    }
+    function parseFirebaseConfig(text){
+      // 1) Try strict JSON
+      try { return JSON.parse(text); } catch {}
+      // 2) Extract first object, sanitize, then parse
+      const rawObj = extractFirstObject(text);
+      const cleaned = sanitizeObjectLiteral(rawObj);
+      return JSON.parse(cleaned);
+    }
+    function validateFirebaseConfig(cfg){
+      const req = ['apiKey','authDomain','projectId','appId'];
+      const miss = req.filter(k => !cfg || typeof cfg[k] !== 'string' || !cfg[k].trim());
+      if (miss.length){ throw new Error('Missing keys: ' + miss.join(', ')); }
+      return true;
+    }
+
+    // ===== Firebase (lazy) =====
+    const FB_CFG_KEY = 'fb_config';
+    let fb = null;
+    async function initFirebaseIfConfigured(){
+      const raw = localStorage.getItem(FB_CFG_KEY);
+      if (!raw) return null;
+      let config; try { config = JSON.parse(raw); } catch { showAlert('Firebase config JSON is invalid.', 'error'); return null; }
+      try {
+        const appMod = await import('https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js');
+        const fsMod  = await import('https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js');
+        const app = appMod.initializeApp(config);
+        const db  = fsMod.getFirestore(app);
+        fb = { db, api: fsMod };
+        setMode('firebase');
+        showAlert('Connected to Firebase (Firestore).', 'success');
+        return fb;
+      } catch (e){
+        showAlert('Firebase init failed: ' + (e?.message||e), 'error');
+        return null;
+      }
+    }
+
+    async function fbSubscribeItems(){
+      const { db, api } = fb; const { collection, onSnapshot, query, orderBy } = api;
+      const q = query(collection(db, 'items'), orderBy('createdAt', 'asc'));
+      return onSnapshot(q, (snap)=>{
+        state.items = snap.docs.map(d=>({ id: d.id, ...d.data() }));
+        render();
+      }, (err)=>{
+        showAlert('Realtime subscription failed: ' + err.message, 'error');
+      });
+    }
+    async function fbUpsertItem(it){
+      const { db, api } = fb; const { doc, setDoc } = api;
+      const ref = doc(db, 'items', it.id);
+      await setDoc(ref, it, { merge: false });
+    }
+    async function fbAddProduction(itemId, addQty){
+      const { db, api } = fb; const { doc, getDoc, setDoc } = api;
+      const ref = doc(db, 'items', itemId);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) throw new Error('Item not found');
+      const it = snap.data();
+      const produced = (Number(it.produced)||0) + addQty;
+      const history = Array.isArray(it.history) ? it.history.slice() : [];
+      history.push({ qty: addQty, at: new Date().toISOString() });
+      it.produced = produced; it.history = history; it.updatedAt = Date.now();
+      await setDoc(ref, it, { merge: false });
+    }
+    async function fbImportMerge(rows){
+      const { db, api } = fb; const { collection, getDocs, writeBatch, doc } = api;
+      const batch = writeBatch(db);
+      const existing = await getDocs(collection(db, 'items'));
+      const map = new Map(existing.docs.map(d => [d.data().name, { id: d.id, ...d.data() }]));
+      for (const r of rows){
+        const cur = map.get(r.name);
+        if (cur){
+          cur.required = (Number(cur.required)||0) + (Number(r.required)||0);
+          cur.updatedAt = Date.now();
+          batch.set(doc(db,'items', cur.id), cur);
+        } else {
+          const id = uuid();
+          const it = { id, name: r.name, required: r.required, produced: 0, history: [], createdAt: Date.now(), updatedAt: Date.now() };
+          batch.set(doc(db,'items', id), it);
+        }
+      }
+      await batch.commit();
+    }
+    async function fbCloseDay(){
+      const { db, api } = fb; const { collection, getDocs, addDoc, deleteDoc, doc } = api;
+      const today = todayKey();
+      const itemsSnap = await getDocs(collection(db,'items'));
+      const items = itemsSnap.docs.map(d=>({id:d.id,...d.data()}));
+      await addDoc(collection(db,'archives'), { date: today, items, archivedAt: Date.now() });
+      await Promise.all(items.map(it => deleteDoc(doc(db,'items', it.id))));
+    }
+
+    // ===== Import helpers =====
+    const NAME_KEYS = ['item','name','product','item name','product name'];
+    const QTY_KEYS  = ['required','qty','quantity','required qty','required quantity','required_qty'];
+    const normalizeHeader = (h) => String(h||'').trim().toLowerCase();
+    function pickKey(obj, keys){
+      const map = Object.fromEntries(Object.keys(obj).map(k => [normalizeHeader(k), k]));
+      for (const key of keys){ if (map[key]) return map[key]; }
+      return null;
+    }
+    function normalizeRow(row){
+      const nameKey = pickKey(row, NAME_KEYS);
+      const qtyKey  = pickKey(row, QTY_KEYS);
+      const name = nameKey ? String(row[nameKey]).trim() : '';
+      const req  = qtyKey ? Number(String(row[qtyKey]).replace(/[\,\s]/g,'')) : NaN;
+      return { name, required: req };
+    }
+    function csvToRows(text){
+      const lines = String(text).split(/\r?\n/);
+      if (!lines.length) return [];
+      const headers = (lines[0]||'').split(',');
+      const rows = [];
+      for (let i=1;i<lines.length;i++){
+        if (!lines[i]) continue;
+        const cols = lines[i].split(',');
+        const obj = {};
+        headers.forEach((h,idx)=> obj[h]= cols[idx] ?? '');
+        rows.push(obj);
+      }
+      return rows;
+    }
+
+    // ===== Rendering =====
+    function renderRow(id, data) {
+      const remaining = computeRemaining(data.required, data.produced);
+      const over = computeOver(data.required, data.produced);
+      const tr = document.createElement('tr');
+      tr.id = `row-${id}`;
+      tr.innerHTML = `
+        <td class="py-3 px-4 font-medium">${data.name || ''}</td>
+        <td class="py-3 px-4">${fmt(data.required || 0)}</td>
+        <td class="py-3 px-4">${fmt(data.produced || 0)}</td>
+        <td class="py-3 px-4 ${remaining === 0 ? 'text-green-600 font-semibold' : ''}">${fmt(remaining)}</td>
+        <td class="py-3 px-4 ${over > 0 ? 'text-red-600 font-semibold' : ''}">${fmt(over)}</td>
+        <td class="py-3 px-4 w-64">
+          <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+            <div class="h-2 bg-blue-600" style="width: ${pct(data.produced || 0, data.required || 0)}%"></div>
+          </div>
+        </td>
+        <td class="py-3 px-4">
+          <div class="flex items-center gap-2">
+            ${state.role === 'chef' ? `
+              <input type="number" min="0" step="1" placeholder="Qty" class="qty-${id} w-24 rounded-xl border px-3 py-2" />
+              <button class="add-${id} px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700">Add</button>
+            ` : ''}
+          </div>
+        </td>`;
+      if (state.role === 'chef') {
+        const addBtn = tr.querySelector(`.add-${id}`);
+        on(addBtn, 'click', async () => {
+          const input = tr.querySelector(`.qty-${id}`);
+          const addQty = Number(input?.value || 0);
+          if (!Number.isFinite(addQty) || addQty <= 0) return showAlert('Enter a valid quantity to add.', 'error');
+          try {
+            if (state.mode === 'firebase'){
+              await fbAddProduction(id, addQty);
+            } else {
+              const all = lsList();
+              const it = all.find(x => x.id === id);
+              if (!it) return showAlert('Item not found.', 'error');
+              it.produced = (it.produced || 0) + addQty;
+              it.history = Array.isArray(it.history) ? it.history : [];
+              it.history.push({ qty: addQty, at: new Date().toISOString() });
+              it.updatedAt = Date.now();
+              lsUpsert(it);
+              render();
+            }
+            showAlert('Production added successfully.', 'success');
+          } catch (e) {
+            showAlert('Error adding production: ' + (e.message || e), 'error');
+          }
+        });
+      }
+      return tr;
+    }
+    function render() {
+      tbody.innerHTML = '';
+      const items = state.mode === 'firebase' ? state.items : lsList();
+      items.forEach(it => tbody.appendChild(renderRow(it.id, it)));
+    }
+
+    // ===== Local/Firebase init =====
+    showCurrentDay();
+    initFirebaseIfConfigured().then(fbInstance => {
+      if (fbInstance) {
+        fb = fbInstance;
+        fbSubscribeItems();
+      } else {
+        state.items = lsList();
+        render();
+      }
+    });
+
+    // ===== Event handlers =====
+    on(cancelFbBtn, 'click', () => { fbModal.close(); });
+    on(saveFbBtn, 'click', async (ev) => {
+      ev.preventDefault();
+      const raw = fbConfigInput.value.trim();
+      if (!raw) return showAlert('Firebase config cannot be empty.', 'error');
+      let config;
+      try { config = parseFirebaseConfig(raw); } catch { showAlert('Invalid JSON format.', 'error'); return; }
+      try { validateFirebaseConfig(config); } catch(e){ showAlert(e.message, 'error'); return; }
+      localStorage.setItem(FB_CFG_KEY, JSON.stringify(config));
+      fbModal.close();
+      location.reload();
+    });
+
+    on(openHistoryBtn, 'click', () => {
+      dailyHistoryModal.showModal();
+      const today = todayKey();
+      historyDateInput.value = today;
+      dailyHistoryTbody.innerHTML = '';
+      if (state.mode === 'firebase' && fb && fb.api) {
+        const { getDocs, collection } = fb.api;
+        getDocs(collection(fb.db, 'archives')).then(snap => {
+          const found = snap.docs.find(d => d.data().date === today);
+          dailyHistoryTbody.innerHTML = '';
+          if (found) {
+            const items = found.data().items || [];
+            items.forEach(it => dailyHistoryTbody.appendChild(renderRow(it.id, it)));
+          } else {
+            dailyHistoryTbody.innerHTML = `<tr><td colspan="3" class="py-3 px-4 text-center text-slate-500">No production history for today.</td></tr>`;
+          }
+        });
+      } else {
+        const items = JSON.parse(localStorage.getItem('history_' + today) || '[]');
+        if (items.length) {
+          items.forEach(it => dailyHistoryTbody.appendChild(renderRow(it.id, it)));
+        } else {
+          dailyHistoryTbody.innerHTML = `<tr><td colspan="3" class="py-3 px-4 text-center text-slate-500">No production history for today.</td></tr>`;
+        }
+      }
+    });
+    on(closeDailyHistoryBtn, 'click', () => { dailyHistoryModal.close(); });
+
+    on(closeDayBtn, 'click', async () => {
+      if (!confirm('Are you sure you want to close the day? This will archive today\'s production and clear the current items.')) return;
+      try {
+        if (state.mode === 'firebase'){
+          await fbCloseDay();
+        } else {
+          const today = todayKey();
+          const itemsSnap = lsGet();
+          localStorage.setItem('history_' + today, JSON.stringify(itemsSnap));
+          lsSet([]);
+        }
+        showAlert('Day closed and archived successfully.', 'success');
+        render();
+      } catch (e) {
+        showAlert('Error closing day: ' + (e.message || e), 'error');
+      }
+    });
+
+    on(addItemBtn, 'click', async () => {
+      if (state.role !== 'admin') return;
+      const name = prompt('Enter item name:');
+      if (!name) return;
+      const required = parseFloat(prompt('Enter required quantity:'));
+      if (isNaN(required)) return;
+      const newItem = { id: uuid(), name, required, produced: 0, history: [], createdAt: Date.now(), updatedAt: Date.now() };
+      try {
+        if (state.mode === 'firebase'){
+          await fbUpsertItem(newItem);
+        } else {
+          lsUpsert(newItem);
+        }
+        showAlert('Item added successfully.', 'success');
+        render();
+      } catch (e) {
+        showAlert('Error adding item: ' + (e.message || e), 'error');
+      }
+    });
+
+    on(importBtn, 'click', () => { fileInput.click(); });
+    on(fileInput, 'change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const ext = file.name.split('.').pop().toLowerCase();
+      let rows = [];
+      if (ext === 'csv') {
+        const text = await file.text();
+        const csvRows = csvToRows(text);
+        rows = csvRows.map(normalizeRow);
+      } else {
+        const data = await file.arrayBuffer();
+        const wb = XLSX.read(data, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const sheetRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        rows = sheetRows.map(normalizeRow);
+      }
+      const valid = rows.filter(r => r.name && Number.isFinite(r.required) && r.required >= 0);
+      if (!valid.length) return showAlert('No valid rows detected in file.', 'error');
+      try {
+        if (state.mode === 'firebase') await fbImportMerge(valid);
+        else {
+          const merged = [...lsList()];
+          for (const r of valid){
+            const cur = merged.find(x => x.name === r.name);
+            if (cur){ cur.required = (cur.required||0) + r.required; cur.updatedAt = Date.now(); }
+            else { merged.push({ id: uuid(), name: r.name, required: r.required, produced: 0, history: [], createdAt: Date.now(), updatedAt: Date.now() }); }
+          }
+          lsSet(merged);
+        }
+        showAlert(`Imported ${valid.length} rows.`, 'success');
+        render();
+      } catch(e){
+        showAlert('Import failed: ' + (e?.message||e), 'error');
+      } finally {
+        if (fileInput) fileInput.value = '';
+      }
+    });
+
+    on(exportCsvBtn, 'click', () => {
+      const items = state.mode === 'firebase' ? state.items : lsList();
+      if (!items.length) return showAlert('No data available to export.', 'info');
+      const csvRows = [];
+      const headers = ['Item', 'Required', 'Produced'];
+      csvRows.push(headers.join(','));
+      for (const it of items) {
+        const row = [it.name, it.required, it.produced];
+        csvRows.push(row.join(','));
+      }
+      const csvString = csvRows.join('\n');
+      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.setAttribute('href', url);
+      a.setAttribute('download', 'production_data.csv');
+      a.click();
+      URL.revokeObjectURL(url);
+      showAlert('Data exported as CSV.', 'success');
+    });
+
+    on(runTestsBtn, 'click', () => {
+      try {
+        // Basic tests
+        const items = state.mode === 'firebase' ? state.items : lsList();
+        let passed = 0, failed = 0;
+        for (const it of items) {
+          if (it.required < 0 || it.produced < 0) failed++;
+          else passed++;
+        }
+        showAlert(`Tests completed. Passed: ${passed}, Failed: ${failed}`, 'info');
+      } catch(e){
+        showAlert('Test error: ' + (e.message || e), 'error');
+      }
+    });
+  })();
+  </script>
+</body>
+</html>
+ 
+    
